@@ -1,0 +1,135 @@
+# - name: provisioning
+#   hosts: all
+#   become: yes
+#   gather_facts: False
+#   vars:
+#     app_path: /vagrant
+#     home: /home/vagrant
+#   tasks:
+#     - name: set timezone to Asia/Tokyo
+#       timezone:
+#         name: Asia/Tokyo
+
+#     - name: add yum repository
+#       yum: name="{{ item }}" state=latest
+#       with_items:
+#         - epel-release
+#         - http://rpms.famillecollet.com/enterprise/remi-release-7.rpm
+
+#     - name: remove mariadb-libs
+#       yum: name=mariadb-libs state=absent
+
+#     - name: install mysql repository
+#       yum: name=http://dev.mysql.com/get/mysql80-community-release-el7-3.noarch.rpm state=present
+
+#     - name: yum basic install
+#       yum: name="{{ item }}" state=present
+#       with_items:
+#         - zip
+#         - unzip
+#         - git
+#         - MySQL-python
+#         - mysql-community-server
+#         - maven
+
+#     - name: git clone
+#       ansible.builtin.git:
+#         repo: https://github.com/yoshito1124/spring.git
+#         dest: /home/vagrant
+# ---
+- name: provisioning
+  hosts: all
+  become: true
+  tasks:
+    - name: remove mariadb-libs
+      yum:
+        state: absent
+        name: mariadb-libs
+
+    - name: install mysql repository
+      yum:
+        state: present
+        name: http://dev.mysql.com/get/mysql57-community-release-el6-7.noarch.rpm
+        validate_certs: yes
+
+    - name: yum basic install
+      yum:
+        state: present
+        name: "{{ item }}"
+      with_items:
+        - yum-utils
+        - MySQL-python
+        - mysql-community-server
+
+    - name: running and enabled mysqld
+      service:
+        name: mysqld
+        state: started
+        enabled: yes
+
+    - name: check .my.cnf exists
+      stat:
+        path: /root/.my.cnf
+      register: mycnf_file
+
+    - name: get temporary password
+      shell: cat /var/log/mysqld.log | grep "temporary password" | awk '{print $11}'
+      register: mysql_default_password
+      when: not mycnf_file.stat.exists
+
+    - name: deploy init .my.cnf
+      template:
+        src: templates/init_my.cnf.j2
+        dest: /root/.my.cnf
+        owner: root
+        group: root
+        mode: 0644
+      when: not mycnf_file.stat.exists
+
+    - name: change password validation to the easy way
+      shell: |
+        mysql -u root -p'{{ mysql_default_password.stdout }}' --connect-expired-password -e "SET GLOBAL validate_password_length=4;"
+        mysql -u root -p'{{ mysql_default_password.stdout }}' --connect-expired-password -e "SET GLOBAL validate_password_policy=LOW;"
+      when: not mycnf_file.stat.exists
+
+    - name: change root user password
+      shell: |
+        mysql -u root -p'{{ mysql_default_password.stdout }}' --connect-expired-password -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root';"
+      when: not mycnf_file.stat.exists
+
+    - name: deploy changed .my.cnf
+      template:
+        src: templates/my.cnf.j2
+        dest: /root/.my.cnf
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: deploy changed .my.cnf
+      template:
+        src: templates/my.cnf.j2
+        dest: /etc/my.cnf
+
+    - name: remove all anonymous user
+      mysql_user:
+        name: ''
+        state: absent
+        host: localhost
+
+    - name: create database
+      mysql_db:
+        name: spring
+        state: present
+        encoding: utf8mb4
+
+    - name: create user
+      mysql_user:
+        name: root
+        password: 
+        priv: '*.*:ALL,GRANT'
+        state: present
+
+    - name: restart mysqld
+      service:
+        name: mysqld
+        state: restarted

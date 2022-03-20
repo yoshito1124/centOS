@@ -1,3 +1,5 @@
+#mariaDBとmavenの設定
+
 - name: provisioning
   hosts: all
   become: yes
